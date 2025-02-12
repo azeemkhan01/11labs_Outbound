@@ -176,11 +176,11 @@ fastify.post("/make-outbound-call", async (request, reply) => {
   }
 });
 
-// Start the Fastify server
-fastify.listen({ port: PORT }, (err) => {
+// Start the Fastify server and bind explicitly to '0.0.0.0' for external access on Render.com
+fastify.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
   if (err) {
     console.error("Error starting server:", err);
     process.exit(1);
   }
-  console.log(`[Server] Listening on port ${PORT}`);
+  console.log(`[Server] Listening on ${address}`);
 });
