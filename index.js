@@ -13,7 +13,8 @@ const {
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
   TWILIO_PHONE_NUMBER,
-  TWILIO_PHONE_NUMBER_V2
+  TWILIO_PHONE_NUMBER_V2,
+  ELEVENLABS_AGENT_ID_V2
 } = process.env;
 
 // Check for the required environment variables
@@ -178,6 +179,123 @@ fastify.post("/make-outbound-call", async (request, reply) => {
 });
 
 // Route to initiate an outbound call
+// Route to handle incoming calls from Twilio
+fastify.all("/incoming-call-eleven-v2", async (request, reply) => {
+  // Generate TwiML response to connect the call to a WebSocket stream
+  const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+    <Response>
+      <Connect>
+        <Stream url="wss://${request.headers.host}/media-stream-v2" />
+      </Connect>
+    </Response>`;
+
+  reply.type("text/xml").send(twimlResponse);
+});
+
+// WebSocket route for handling media streams from Twilio
+fastify.register(async (fastifyInstance) => {
+  fastifyInstance.get("/media-stream-v2", { websocket: true }, (connection, req) => {
+    console.info("[Server] Twilio connected to media stream.");
+
+    let streamSid = null;
+
+    // Connect to ElevenLabs Conversational AI WebSocket
+    const elevenLabsWs = new WebSocket(
+      `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${ELEVENLABS_AGENT_ID_V2}`
+    );
+
+    elevenLabsWs.on("open", () => {
+      console.log("[II] Connected to Conversational AI.");
+    });
+
+    elevenLabsWs.on("message", (data) => {
+      try {
+        const message = JSON.parse(data);
+        handleElevenLabsMessage(message, connection);
+      } catch (error) {
+        console.error("[II] Error parsing message:", error);
+      }
+    });
+
+    elevenLabsWs.on("error", (error) => {
+      console.error("[II] WebSocket error:", error);
+    });
+
+    elevenLabsWs.on("close", () => {
+      console.log("[II] Disconnected.");
+    });
+
+    const handleElevenLabsMessage = (message, connection) => {
+      switch (message.type) {
+        case "conversation_initiation_metadata":
+          console.info("[II] Received conversation initiation metadata.");
+          break;
+        case "audio":
+          if (message.audio_event?.audio_base_64) {
+            const audioData = {
+              event: "media",
+              streamSid,
+              media: {
+                payload: message.audio_event.audio_base_64,
+              },
+            };
+            connection.send(JSON.stringify(audioData));
+          }
+          break;
+        case "interruption":
+          connection.send(JSON.stringify({ event: "clear", streamSid }));
+          break;
+        case "ping":
+          if (message.ping_event?.event_id) {
+            const pongResponse = {
+              type: "pong",
+              event_id: message.ping_event.event_id,
+            };
+            elevenLabsWs.send(JSON.stringify(pongResponse));
+          }
+          break;
+      }
+    };
+
+    connection.on("message", async (message) => {
+      try {
+        const data = JSON.parse(message);
+        switch (data.event) {
+          case "start":
+            streamSid = data.start.streamSid;
+            console.log(`[Twilio] Stream started with ID: ${streamSid}`);
+            break;
+          case "media":
+            if (elevenLabsWs.readyState === WebSocket.OPEN) {
+              const audioMessage = {
+                user_audio_chunk: Buffer.from(data.media.payload, "base64").toString("base64"),
+              };
+              elevenLabsWs.send(JSON.stringify(audioMessage));
+            }
+            break;
+          case "stop":
+            elevenLabsWs.close();
+            break;
+          default:
+            console.log(`[Twilio] Received unhandled event: ${data.event}`);
+        }
+      } catch (error) {
+        console.error("[Twilio] Error processing message:", error);
+      }
+    });
+
+    connection.on("close", () => {
+      elevenLabsWs.close();
+      console.log("[Twilio] Client disconnected");
+    });
+
+    connection.on("error", (error) => {
+      console.error("[Twilio] WebSocket error:", error);
+      elevenLabsWs.close();
+    });
+  });
+});
+
 fastify.post("/make-outbound-call-v2", async (request, reply) => {
   const { to } = request.body; // Destination phone number
 
@@ -187,7 +305,7 @@ fastify.post("/make-outbound-call-v2", async (request, reply) => {
 
   try {
     const call = await twilioClient.calls.create({
-      url: `https://${request.headers.host}/incoming-call-eleven`, // Webhook for call handling
+      url: `https://${request.headers.host}/incoming-call-eleven-v2`, // Webhook for call handling
       to: to,
       from: TWILIO_PHONE_NUMBER_V2,
     });
