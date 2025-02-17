@@ -13,6 +13,7 @@ const {
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
   TWILIO_PHONE_NUMBER,
+  TWILIO_PHONE_NUMBER_V2
 } = process.env;
 
 // Check for the required environment variables
@@ -166,6 +167,29 @@ fastify.post("/make-outbound-call", async (request, reply) => {
       url: `https://${request.headers.host}/incoming-call-eleven`, // Webhook for call handling
       to: to,
       from: TWILIO_PHONE_NUMBER,
+    });
+
+    console.log(`[Twilio] Outbound call initiated: ${call.sid}`);
+    reply.send({ message: "Call initiated", callSid: call.sid });
+  } catch (error) {
+    console.error("[Twilio] Error initiating call:", error);
+    reply.status(500).send({ error: "Failed to initiate call" });
+  }
+});
+
+// Route to initiate an outbound call
+fastify.post("/make-outbound-call-v2", async (request, reply) => {
+  const { to } = request.body; // Destination phone number
+
+  if (!to) {
+    return reply.status(400).send({ error: "Destination phone number is required" });
+  }
+
+  try {
+    const call = await twilioClient.calls.create({
+      url: `https://${request.headers.host}/incoming-call-eleven`, // Webhook for call handling
+      to: to,
+      from: TWILIO_PHONE_NUMBER_V2,
     });
 
     console.log(`[Twilio] Outbound call initiated: ${call.sid}`);
